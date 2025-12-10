@@ -327,6 +327,7 @@ impl Git {
         let mut staged = FxHashSet::default();
         let mut unstaged = FxHashSet::default();
         let mut last_status = "A";
+        let mut rename_copy_source: Option<WorkspaceRelativePathBuf> = None;
 
         // Lines AND statuses are terminated by a NUL byte
         //  X\0file\0
@@ -341,6 +342,7 @@ impl Git {
             // X000\0
             if DIFF_SCORE_PATTERN.is_match(line) || DIFF_PATTERN.is_match(line) {
                 last_status = &line[0..1];
+                rename_copy_source = None;
                 continue;
             }
 
@@ -348,17 +350,41 @@ impl Git {
             let file = module.path.join(self.to_workspace_relative_path(line));
 
             match x {
-                'A' | 'C' => {
+                'A' => {
                     added.insert(file.clone());
                     staged.insert(file.clone());
+                }
+                'C' => {
+                    // For copies, the first file is the source, second is the destination
+                    if rename_copy_source.is_none() {
+                        rename_copy_source = Some(file.clone());
+                    } else {
+                        // Add the copied file (destination)
+                        added.insert(file.clone());
+                        staged.insert(file.clone());
+                        rename_copy_source = None;
+                    }
                 }
                 'D' => {
                     deleted.insert(file.clone());
                     staged.insert(file.clone());
                 }
-                'M' | 'R' | 'T' => {
+                'M' | 'T' => {
                     modified.insert(file.clone());
                     staged.insert(file.clone());
+                }
+                'R' => {
+                    // For renames, the first file is the old name, second is the new name
+                    if rename_copy_source.is_none() {
+                        // This is the old filename - track it as deleted
+                        deleted.insert(file.clone());
+                        rename_copy_source = Some(file.clone());
+                    } else {
+                        // This is the new filename - track it as modified
+                        modified.insert(file.clone());
+                        staged.insert(file.clone());
+                        rename_copy_source = None;
+                    }
                 }
                 'U' => {
                     unstaged.insert(file.clone());
